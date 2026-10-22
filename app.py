@@ -2,7 +2,7 @@
 import json
 from pathlib import Path
 
-import gradio as gr
+import streamlit as st
 import torch
 from PIL import Image
 from torch import nn
@@ -67,10 +67,10 @@ def predict(image: Image.Image):
         for score, i in zip(scores.cpu(), indices.cpu())
     }
 
-demo = gr.Interface(
+demo = st.Interface(
     fn=predict,
-    inputs=gr.Image(type="pil", label="Upload a bird photo"),
-    outputs=gr.Label(num_top_classes=5, label="Top predictions"),
+    inputs=st.Image(type="pil", label="Upload a bird photo"),
+    outputs=st.Label(num_top_classes=5, label="Top predictions"),
     title="Bird Species Classifier",
     description="Upload a bird image to see the five most likely species."
 )
