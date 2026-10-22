@@ -9,38 +9,59 @@ from torch import nn
 from torchvision import models, transforms
 
 BASE = Path(__file__).parent
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+DEVICE = torch.device("cpu")
 
-# Load the species names.
+st.set_page_config(
+    page_title="Bird Species Classifier",
+    page_icon="🐦",
+    layout="centered"
+)
+
+st.title("Bird Species Classifier")
+st.write(
+    "Upload a bird photo to see the five most likely species."
+)
+
+# Load species names.
 with open(BASE / "class_names.json", encoding="utf-8") as f:
     CLASS_NAMES = {
         int(k): v for k, v in json.load(f).items()
     }
 
-# Rebuild the same architecture used during training.
-model = models.resnet50(weights=None)
-num_features = model.fc.in_features
 
-model.fc = nn.Sequential(
-    nn.Dropout(p=0.4),
-    nn.Linear(num_features, 200)
-)
+# Load the trained model once and cache it.
+@st.cache_resource
+def load_model():
+    model = models.resnet50(weights=None)
+    num_features = model.fc.in_features
 
-checkpoint = torch.load(
-    BASE / "best_resnet50.pth",
-    map_location="cpu",
-    weights_only=True
-)
+    # Must match the architecture used during training.
+    model.fc = nn.Sequential(
+        nn.Dropout(p=0.4),
+        nn.Linear(num_features, 200)
+    )
 
-# Support either a training checkpoint or a raw state dictionary.
-state_dict = checkpoint.get("model_state_dict", checkpoint) \
-    if isinstance(checkpoint, dict) else checkpoint
+    checkpoint = torch.load(
+        BASE / "best_resnet50.pth",
+        map_location="cpu",
+        weights_only=True
+    )
 
-model.load_state_dict(state_dict)
-model.to(DEVICE)
-model.eval()
+    state_dict = (
+        checkpoint["model_state_dict"]
+        if isinstance(checkpoint, dict)
+        and "model_state_dict" in checkpoint
+        else checkpoint
+    )
 
-# Use the same normalization as during validation.
+    model.load_state_dict(state_dict)
+    model.to(DEVICE)
+    model.eval()
+
+    return model
+
+
+# Match the validation preprocessing.
 preprocess = transforms.Compose([
     transforms.Resize(255),
     transforms.CenterCrop(224),
@@ -51,29 +72,42 @@ preprocess = transforms.Compose([
     ),
 ])
 
-def predict(image: Image.Image):
-    if image is None:
-        return {}
 
-    x = preprocess(image.convert("RGB")).unsqueeze(0).to(DEVICE)
-
-    with torch.inference_mode():
-        probabilities = torch.softmax(model(x)[0], dim=0)
-
-    scores, indices = probabilities.topk(5)
-
-    return {
-        CLASS_NAMES[int(i)]: float(score)
-        for score, i in zip(scores.cpu(), indices.cpu())
-    }
-
-demo = st.Interface(
-    fn=predict,
-    inputs=st.Image(type="pil", label="Upload a bird photo"),
-    outputs=st.Label(num_top_classes=5, label="Top predictions"),
-    title="Bird Species Classifier",
-    description="Upload a bird image to see the five most likely species."
+uploaded_file = st.file_uploader(
+    "Choose a bird photo",
+    type=["jpg", "jpeg", "png"]
 )
 
-if __name__ == "__main__":
-    demo.launch()
+if uploaded_file is not None:
+    try:
+        image = Image.open(uploaded_file).convert("RGB")
+
+        st.image(
+            image,
+            caption="Uploaded bird photo",
+            use_container_width=True
+        )
+
+        with st.spinner("Classifying bird species..."):
+            model = load_model()
+            x = preprocess(image).unsqueeze(0).to(DEVICE)
+
+            with torch.inference_mode():
+                probabilities = torch.softmax(
+                    model(x)[0], dim=0
+                )
+
+            scores, indices = probabilities.topk(5)
+
+        st.subheader("Top 5 predictions")
+
+        for score, index in zip(
+            scores.tolist(), indices.tolist()
+        ):
+            species = CLASS_NAMES[index]
+
+            st.write(f"**{species}** — {score:.2%}")
+            st.progress(float(score))
+
+    except Exception as e:
+        st.error(f"Prediction failed: {e}")
